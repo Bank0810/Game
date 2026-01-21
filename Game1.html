@@ -1,0 +1,619 @@
+<!doctype html>
+<html lang="th">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<title>Breakout — Vanilla JS</title>
+<style>
+  :root { --panel-bg: rgba(255,255,255,.8); }
+  * { box-sizing: border-box; }
+  body {
+    margin: 0; background: #0f172a; color: #0b1020;
+    font: 600 16px/1.5 system-ui, -apple-system, Segoe UI, Roboto, sans-serif;
+    display: grid; place-items: center; min-height: 100svh;
+  }
+  .wrap {
+    width: min(900px, 96vw);
+  }
+  .hud {
+    display: flex; gap: 10px; align-items: center; justify-content: space-between;
+    color: #e2e8f0; margin: 8px 4px 6px;
+    flex-wrap: wrap;
+  }
+  .hud .left, .hud .right { display:flex; gap:12px; align-items:center; }
+  .btn {
+    cursor: pointer; padding: 6px 12px; border-radius: 8px; border: 2px solid #334155;
+    background:#0b1222; color:#e2e8f0;
+  }
+  .btn:active { transform: translateY(1px); }
+  .canvas-wrap { position: relative; border: 3px solid #1f2937; border-radius: 12px; overflow: hidden; background: #0b1222; }
+  canvas { display: block; width: 100%; height: auto; background: radial-gradient(1200px 700px at 30% 0%, #0b1a30, #0a1424 60%, #0b1222); }
+  .overlay {
+    position: absolute; inset: 0; display: none; align-items: center; justify-content: center; text-align:center;
+    background: linear-gradient(180deg, rgba(15,23,42,.4), rgba(15,23,42,.55));
+  }
+  .overlay.show { display: flex; }
+  .panel {
+    background: var(--panel-bg); color:#0b1020; padding: 20px 18px; border-radius: 12px; width: min(92%, 520px);
+    box-shadow: 0 10px 30px rgba(0,0,0,.25); backdrop-filter: blur(4px);
+  }
+  .panel h1 { margin: 0 0 8px; font-size: 26px; }
+  .panel p { margin: 6px 0 12px; color:#111827; }
+  .panel .row { display:flex; gap:8px; flex-wrap:wrap; justify-content:center; }
+  .kbd { background:#111827; color:#e5e7eb; padding: 2px 8px; border-radius:6px; border:1px solid #374151; font-weight:700; }
+  .stat { padding: 4px 8px; border-radius: 6px; background: #0b1222; color:#e2e8f0; border: 1px solid #334155; }
+</style>
+</head>
+<body>
+<div class="wrap">
+  <div class="hud">
+    <div class="left">
+      <span class="stat">คะแนน: <b id="score">0</b></span>
+      <span class="stat">ชีวิต: <b id="lives">3</b></span>
+      <span class="stat">ด่าน: <b id="level">1</b>/<b id="levelMax">3</b></span>
+      <span class="stat">สถิติสูงสุด: <b id="best">0</b></span>
+    </div>
+    <div class="right">
+      <button id="btnPause" class="btn" title="P">Pause</button>
+      <button id="btnRestart" class="btn" title="R">Restart</button>
+      <button id="btnSound" class="btn" title="S">Sound: On</button>
+    </div>
+  </div>
+
+  <div class="canvas-wrap" id="cwrap">
+    <canvas id="game" width="900" height="600" aria-label="Breakout Game"></canvas>
+
+    <div class="overlay show" id="overlay">
+      <div class="panel">
+        <h1 id="title">BREAKOUT</h1>
+        <p id="subtitle">เล็งไม้ รับลูก แล้วทุบอิฐให้หมด!</p>
+        <p>
+          <span class="kbd">←</span> <span class="kbd">→</span> หรือ เมาส์/ทัช เพื่อบังคับไม้ |
+          <span class="kbd">Space</span> ยิงลูก |
+          <span class="kbd">P</span> หยุดชั่วคราว
+        </p>
+        <div class="row">
+          <button id="btnPlay" class="btn">เริ่มเล่น</button>
+          <button id="btnContinue" class="btn" style="display:none">ด่านต่อไป</button>
+        </div>
+      </div>
+    </div>
+  </div>
+</div>
+
+<script>
+(() => {
+  // ===== Utilities =====
+  const clamp = (v, a, b) => Math.max(a, Math.min(b, v));
+  const rand = (a, b) => a + Math.random() * (b - a);
+  const DPR = () => (window.devicePixelRatio || 1);
+
+  // ===== Audio (Web Audio, lightweight beeps) =====
+  let audioCtx = null;
+  let soundOn = true;
+  function ensureAudio() {
+    if (!audioCtx) audioCtx = new (window.AudioContext || window.webkitAudioContext)();
+  }
+  function beep(freq=440, dur=0.06, type='sine', gain=0.05) {
+    if (!soundOn) return;
+    ensureAudio();
+    const ctx = audioCtx;
+    const t = ctx.currentTime;
+    const osc = ctx.createOscillator();
+    const g = ctx.createGain();
+    osc.type = type; osc.frequency.setValueAtTime(freq, t);
+    g.gain.setValueAtTime(gain, t);
+    g.gain.exponentialRampToValueAtTime(0.0001, t + dur);
+    osc.connect(g).connect(ctx.destination);
+    osc.start(t); osc.stop(t + dur);
+  }
+
+  // ===== Canvas setup (HiDPI + responsive) =====
+  const canvas = document.getElementById('game');
+  const ctx = canvas.getContext('2d');
+  const wrap = document.getElementById('cwrap');
+
+  function resizeCanvas() {
+    // Keep aspect ratio based on initial (900x600)
+    const ratio = canvas.width / canvas.height;
+    const w = wrap.clientWidth;
+    const h = Math.round(w / ratio);
+    // CSS size handled by canvas {width:100%}. We only need to scale internal backing store by DPR:
+    const dpr = DPR();
+    canvas.style.height = h + 'px';
+    canvas.width = Math.round(w * dpr);
+    canvas.height = Math.round(h * dpr);
+    ctx.setTransform(dpr, 0, 0, dpr, 0, 0); // draw in CSS pixels
+  }
+  window.addEventListener('resize', resizeCanvas, { passive:true });
+  resizeCanvas();
+
+  // ===== Game State =====
+  const ui = {
+    score: document.getElementById('score'),
+    lives: document.getElementById('lives'),
+    level: document.getElementById('level'),
+    levelMax: document.getElementById('levelMax'),
+    best: document.getElementById('best'),
+    overlay: document.getElementById('overlay'),
+    title: document.getElementById('title'),
+    subtitle: document.getElementById('subtitle'),
+    btnPlay: document.getElementById('btnPlay'),
+    btnContinue: document.getElementById('btnContinue'),
+    btnPause: document.getElementById('btnPause'),
+    btnRestart: document.getElementById('btnRestart'),
+    btnSound: document.getElementById('btnSound'),
+  };
+
+  let best = +localStorage.getItem('breakoutBest') || 0;
+  ui.best.textContent = best;
+
+  const GAME = {
+    running: false,
+    paused: false,
+    awaitingLaunch: true, // ball on paddle
+    score: 0,
+    lives: 3,
+    levelIndex: 0,
+  };
+
+  // ===== Levels (0=empty, 1..=types/colors) =====
+  // 0 = ไม่มีบล็อก, 1/2/3 = บล็อกแข็งขึ้นตามหมายเลข (เลือดมากขึ้น)
+  const LEVELS = [
+    { rows: 6, cols: 12, map: (r,c)=> (r%2===0?1:2) },
+    { rows: 7, cols: 13, map: (r,c)=> ((r+c)%3===0?3: (r%2?2:1)) },
+    { rows: 8, cols: 14, map: (r,c)=> ( (r===0||r===7||c===0||c===13) ? 3 : ((r+c)%2?2:1) ) },
+  ];
+  ui.levelMax.textContent = LEVELS.length;
+
+  // ===== Entities =====
+  const paddle = {
+    w: 110, h: 16,
+    x: 0, y: 0, vx: 0,
+    speed: 750,
+  };
+
+  const ball = {
+    x: 0, y: 0, r: 8,
+    vx: 0, vy: 0,
+    speed: 420, // base speed in px/s
+    maxSpeed: 900,
+    onPaddle: true,
+  };
+
+  let bricks = []; // {x,y,w,h,hp}
+  let brickW = 0, brickH = 0, brickGap = 3, wall = { left: 22, right: 0, top: 80, bottom: 0 };
+
+  function buildLevel(idx) {
+    const l = LEVELS[idx];
+    bricks = [];
+    const W = canvas.clientWidth, H = canvas.clientHeight;
+    wall.right = W - 22; wall.bottom = H - 22;
+
+    const usableW = W - wall.left - (W - wall.right);
+    const usableTop = wall.top;
+
+    brickW = Math.floor((usableW - (l.cols - 1) * brickGap) / l.cols);
+    brickH = 24;
+
+    for (let r = 0; r < l.rows; r++) {
+      for (let c = 0; c < l.cols; c++) {
+        const hp = l.map(r,c);
+        if (hp > 0) {
+          const x = wall.left + c * (brickW + brickGap);
+          const y = usableTop + r * (brickH + brickGap);
+          bricks.push({ x, y, w: brickW, h: brickH, hp });
+        }
+      }
+    }
+  }
+
+  // ===== Input =====
+  const keys = { left:false, right:false };
+  window.addEventListener('keydown', e => {
+    if (e.code === 'ArrowLeft' || e.code === 'KeyA') keys.left = true;
+    if (e.code === 'ArrowRight' || e.code === 'KeyD') keys.right = true;
+    if (e.code === 'Space') {
+      if (!GAME.running) startGame();
+      else if (GAME.awaitingLaunch) launchBall();
+    }
+    if (e.code === 'KeyP') togglePause();
+    if (e.code === 'KeyR') restart();
+    if (e.code === 'KeyS') toggleSound();
+  });
+  window.addEventListener('keyup', e => {
+    if (e.code === 'ArrowLeft' || e.code === 'KeyA') keys.left = false;
+    if (e.code === 'ArrowRight' || e.code === 'KeyD') keys.right = false;
+  });
+
+  // Mouse / touch move = aim paddle
+  function pointerToCanvasX(evt) {
+    const rect = canvas.getBoundingClientRect();
+    const clientX = (evt.touches ? evt.touches[0].clientX : evt.clientX);
+    return (clientX - rect.left);
+  }
+  let pointerActive = false;
+  canvas.addEventListener('pointerdown', e => {
+    pointerActive = true;
+    if (GAME.awaitingLaunch && GAME.running) launchBall();
+  });
+  canvas.addEventListener('pointerup', ()=> pointerActive=false);
+  canvas.addEventListener('pointercancel', ()=> pointerActive=false);
+  canvas.addEventListener('pointermove', e => {
+    const x = pointerToCanvasX(e);
+    aimPaddleAt(x);
+  }, { passive: true });
+  canvas.addEventListener('touchstart', e => {
+    if (!GAME.running) startGame();
+    else if (GAME.awaitingLaunch) launchBall();
+  }, { passive: true });
+  canvas.addEventListener('touchmove', e => {
+    const x = pointerToCanvasX(e);
+    aimPaddleAt(x);
+  }, { passive: true });
+
+  function aimPaddleAt(x) {
+    const half = paddle.w/2;
+    paddle.x = clamp(x - half, wall.left, wall.right - paddle.w);
+    // if ball on paddle, follow
+    if (GAME.awaitingLaunch) {
+      ball.x = paddle.x + paddle.w/2;
+      ball.y = paddle.y - ball.r - 1;
+    }
+  }
+
+  // ===== Controls (UI buttons) =====
+  ui.btnPause.addEventListener('click', togglePause);
+  ui.btnRestart.addEventListener('click', restart);
+  ui.btnSound.addEventListener('click', toggleSound);
+  ui.btnPlay.addEventListener('click', () => {
+    if (!GAME.running) startGame();
+    else if (GAME.awaitingLaunch) launchBall();
+    hideOverlay();
+  });
+  ui.btnContinue.addEventListener('click', () => {
+    nextLevel();
+    hideOverlay();
+  });
+
+  function toggleSound() {
+    soundOn = !soundOn;
+    ui.btnSound.textContent = 'Sound: ' + (soundOn ? 'On' : 'Off');
+    if (soundOn) beep(880, .03, 'square', .03);
+  }
+
+  // ===== Game Flow =====
+  function startGame() {
+    GAME.running = true;
+    GAME.paused = false;
+    GAME.awaitingLaunch = true;
+    GAME.score = 0;
+    GAME.lives = 3;
+    GAME.levelIndex = 0;
+    ui.level.textContent = GAME.levelIndex + 1;
+    ui.score.textContent = GAME.score;
+    ui.lives.textContent = GAME.lives;
+
+    // place paddle & ball
+    const W = canvas.clientWidth, H = canvas.clientHeight;
+    paddle.x = (W - paddle.w)/2;
+    paddle.y = H - 60;
+
+    ball.r = 8;
+    ball.speed = 420;
+    ball.x = paddle.x + paddle.w/2;
+    ball.y = paddle.y - ball.r - 1;
+    ball.vx = 0; ball.vy = 0; ball.onPaddle = true;
+
+    buildLevel(GAME.levelIndex);
+    showOverlay("READY?", "กด Space/แตะจอ เพื่อยิงลูกครั้งแรก", false, true);
+  }
+
+  function restart() {
+    startGame();
+    hideOverlay();
+  }
+
+  function nextLevel() {
+    GAME.levelIndex++;
+    if (GAME.levelIndex >= LEVELS.length) {
+      // All cleared -> Win
+      showOverlay("🎉 ชนะทั้งหมด!", "สุดยอด! ทำคะแนนได้ " + GAME.score.toLocaleString(), false, false);
+      GAME.running = false;
+      return;
+    }
+    ui.level.textContent = GAME.levelIndex + 1;
+    // reset paddle/ball (keep score & lives)
+    const W = canvas.clientWidth, H = canvas.clientHeight;
+    paddle.x = (W - paddle.w)/2;
+    paddle.y = H - 60;
+    ball.speed = 420 + GAME.levelIndex * 20;
+    ball.x = paddle.x + paddle.w/2;
+    ball.y = paddle.y - ball.r - 1;
+    ball.vx = 0; ball.vy = 0; ball.onPaddle = true; GAME.awaitingLaunch = true;
+    buildLevel(GAME.levelIndex);
+    showOverlay("ด่าน " + (GAME.levelIndex+1), "พร้อมหรือยัง? ยิงลูกเพื่อเริ่ม", true, true);
+  }
+
+  function loseLife() {
+    GAME.lives--;
+    ui.lives.textContent = GAME.lives;
+    beep(120, .08, 'sawtooth', .06);
+    if (GAME.lives <= 0) {
+      // Game Over
+      updateBest();
+      showOverlay("เกมจบ!", "คะแนน: " + GAME.score.toLocaleString(), false, true);
+      GAME.running = false;
+      return;
+    }
+    // Reset ball on paddle
+    GAME.awaitingLaunch = true;
+    ball.speed = Math.max(420, ball.speed * 0.95);
+    const W = canvas.clientWidth, H = canvas.clientHeight;
+    paddle.y = H - 60;
+    ball.x = paddle.x + paddle.w/2;
+    ball.y = paddle.y - ball.r - 1;
+    ball.vx = 0; ball.vy = 0; ball.onPaddle = true;
+  }
+
+  function updateBest() {
+    if (GAME.score > best) {
+      best = GAME.score;
+      localStorage.setItem('breakoutBest', best);
+      ui.best.textContent = best;
+    }
+  }
+
+  function showOverlay(title, subtitle, showContinue=false, showPlay=false) {
+    ui.title.textContent = title;
+    ui.subtitle.textContent = subtitle || '';
+    ui.btnContinue.style.display = showContinue ? '' : 'none';
+    ui.btnPlay.style.display = showPlay ? '' : 'none';
+    ui.overlay.classList.add('show');
+  }
+  function hideOverlay() { ui.overlay.classList.remove('show'); }
+
+  function togglePause() {
+    if (!GAME.running) return;
+    GAME.paused = !GAME.paused;
+    ui.btnPause.textContent = GAME.paused ? 'Resume' : 'Pause';
+    if (GAME.paused) showOverlay("พักชั่วคราว", "กด P หรือปุ่ม Resume เพื่อเล่นต่อ", false, false);
+    else hideOverlay();
+  }
+
+  function launchBall() {
+    if (!GAME.awaitingLaunch) return;
+    GAME.awaitingLaunch = false;
+    ball.onPaddle = false;
+    // initial angle based on paddle center and pointer direction
+    const angle = rand(-0.35*Math.PI, -0.65*Math.PI); // shoot upward with some randomness
+    const s = ball.speed;
+    ball.vx = Math.cos(angle)*s;
+    ball.vy = Math.sin(angle)*s;
+    beep(700, .05, 'triangle', .05);
+  }
+
+  // ===== Physics: integration with substeps (prevents tunneling) =====
+  let lastT = 0;
+  function step(ts) {
+    if (!GAME.running) { lastT = ts; requestAnimationFrame(step); return; }
+    if (GAME.paused) { lastT = ts; requestAnimationFrame(step); return; }
+
+    if (!lastT) lastT = ts;
+    let dt = Math.min(32, ts - lastT); // clamp long frames
+    lastT = ts;
+
+    // Update paddle by keys (mouse/touch handled in events)
+    const W = canvas.clientWidth, H = canvas.clientHeight;
+    const accel = paddle.speed;
+    if (keys.left && !keys.right) {
+      paddle.x -= accel * (dt/1000);
+    } else if (keys.right && !keys.left) {
+      paddle.x += accel * (dt/1000);
+    }
+    paddle.x = clamp(paddle.x, wall.left, wall.right - paddle.w);
+    paddle.y = H - 60;
+
+    // If ball on paddle, keep following
+    if (GAME.awaitingLaunch) {
+      ball.x = paddle.x + paddle.w/2;
+      ball.y = paddle.y - ball.r - 1;
+    } else {
+      // substeps
+      let remaining = dt / 1000;
+      const MAX_SUBSTEP = 1/240; // 240Hz substeps if needed
+      while (remaining > 0) {
+        const sub = Math.min(remaining, MAX_SUBSTEP);
+        integrateBall(sub);
+        remaining -= sub;
+      }
+    }
+
+    // Draw
+    draw();
+
+    requestAnimationFrame(step);
+  }
+
+  function integrateBall(dt) {
+    const W = canvas.clientWidth, H = canvas.clientHeight;
+    // Move
+    ball.x += ball.vx * dt;
+    ball.y += ball.vy * dt;
+
+    // Walls (left/right)
+    if (ball.x - ball.r < wall.left) {
+      ball.x = wall.left + ball.r;
+      ball.vx = Math.abs(ball.vx);
+      beep(350, .03, 'square', .03);
+    } else if (ball.x + ball.r > wall.right) {
+      ball.x = wall.right - ball.r;
+      ball.vx = -Math.abs(ball.vx);
+      beep(350, .03, 'square', .03);
+    }
+    // Top wall
+    if (ball.y - ball.r < wall.top) {
+      ball.y = wall.top + ball.r;
+      ball.vy = Math.abs(ball.vy);
+      beep(350, .03, 'square', .03);
+    }
+    // Bottom -> lose life
+    if (ball.y - ball.r > H) {
+      loseLife();
+      return;
+    }
+
+    // Paddle collision (circle vs rect)
+    if (circleRectCollide(ball, paddle)) {
+      // reflect based on hit position (adds "english")
+      const hit = (ball.x - (paddle.x + paddle.w/2)) / (paddle.w/2); // -1..1
+      const angle = clamp(hit, -1, 1) * (Math.PI/3); // up to 60° from vertical
+      const speed = clamp(Math.hypot(ball.vx, ball.vy) * 1.02, ball.speed, ball.maxSpeed); // tiny accel
+      ball.vx = speed * Math.sin(angle);
+      ball.vy = -Math.abs(speed * Math.cos(angle));
+      // place just above paddle
+      ball.y = paddle.y - ball.r - 0.01;
+      beep(500, .04, 'triangle', .04);
+    }
+
+    // Bricks collision
+    // Check only around ball using simple broadphase (scan all is fine at this scale)
+    let anyHit = false;
+    for (let i = 0; i < bricks.length; i++) {
+      const b = bricks[i];
+      if (!b) continue;
+      if (!circleAABBOverlap(ball.x, ball.y, ball.r, b.x, b.y, b.w, b.h)) continue;
+
+      // precise resolution: find closest point
+      const closestX = clamp(ball.x, b.x, b.x + b.w);
+      const closestY = clamp(ball.y, b.y, b.y + b.h);
+      const dx = ball.x - closestX;
+      const dy = ball.y - closestY;
+      const dist2 = dx*dx + dy*dy;
+      if (dist2 <= ball.r*ball.r + 1e-6) {
+        // Determine side of impact by comparing penetration direction
+        const overlapX = (ball.r - Math.abs(dx));
+        const overlapY = (ball.r - Math.abs(dy));
+        if (overlapX < overlapY) {
+          // collide horizontally -> flip vx
+          if (dx > 0) ball.x += overlapX + 0.01; else ball.x -= overlapX + 0.01;
+          ball.vx = -ball.vx;
+        } else {
+          // collide vertically -> flip vy
+          if (dy > 0) ball.y += overlapY + 0.01; else ball.y -= overlapY + 0.01;
+          ball.vy = -ball.vy;
+        }
+        // damage brick
+        b.hp -= 1;
+        if (b.hp <= 0) { bricks[i] = null; GAME.score += 50; }
+        else GAME.score += 15;
+        ui.score.textContent = GAME.score;
+        anyHit = true;
+      }
+    }
+    if (anyHit) {
+      beep(700 + Math.random()*100, .02, 'square', .03);
+      // remove null bricks efficiently
+      if (_brickRemainingCount() === 0) {
+        updateBest();
+        showOverlay("เคลียร์ด่าน!", "คะแนนสะสม: " + GAME.score.toLocaleString(), true, false);
+        GAME.paused = true; // pause until continue
+      }
+    }
+  }
+
+  function _brickRemainingCount() {
+    let n = 0;
+    for (const b of bricks) if (b) n++;
+    return n;
+  }
+
+  function circleAABBOverlap(cx, cy, cr, rx, ry, rw, rh) {
+    const nx = clamp(cx, rx, rx+rw);
+    const ny = clamp(cy, ry, ry+rh);
+    const dx = cx - nx, dy = cy - ny;
+    return (dx*dx + dy*dy) <= cr*cr;
+  }
+
+  function circleRectCollide(circ, rect) {
+    return circleAABBOverlap(circ.x, circ.y, circ.r, rect.x, rect.y, rect.w, rect.h);
+  }
+
+  // ===== Rendering =====
+  function draw() {
+    const W = canvas.clientWidth, H = canvas.clientHeight;
+    ctx.clearRect(0, 0, W, H);
+
+    // Side walls top line
+    ctx.save();
+    ctx.strokeStyle = '#1f2937';
+    ctx.lineWidth = 2;
+    ctx.beginPath();
+    ctx.moveTo(wall.left-10, wall.top); ctx.lineTo(wall.right+10, wall.top);
+    ctx.stroke();
+    ctx.restore();
+
+    // Bricks
+    for (const b of bricks) {
+      if (!b) continue;
+      // color by hp
+      const col = b.hp === 3 ? '#f59e0b' : (b.hp === 2 ? '#60a5fa' : '#22c55e');
+      roundedRect(b.x, b.y, b.w, b.h, 6, col, '#0b1222');
+      // optional gloss
+      ctx.fillStyle = 'rgba(255,255,255,.15)';
+      ctx.fillRect(b.x+4, b.y+3, Math.max(0, b.w-8), 6);
+    }
+
+    // Paddle
+    roundedRect(paddle.x, paddle.y, paddle.w, paddle.h, 8, '#94a3b8', '#0b1222');
+
+    // Ball
+    ctx.beginPath();
+    ctx.arc(ball.x, ball.y, ball.r, 0, Math.PI*2);
+    ctx.fillStyle = '#e2e8f0';
+    ctx.fill();
+    // ball shadow
+    ctx.globalAlpha = .2;
+    ctx.beginPath(); ctx.arc(ball.x+2, ball.y+2, ball.r, 0, Math.PI*2);
+    ctx.fillStyle = '#000';
+    ctx.fill();
+    ctx.globalAlpha = 1;
+  }
+
+  function roundedRect(x,y,w,h,r, fill, stroke) {
+    ctx.beginPath();
+    ctx.moveTo(x+r,y);
+    ctx.arcTo(x+w,y,x+w,y+h,r);
+    ctx.arcTo(x+w,y+h,x,y+h,r);
+    ctx.arcTo(x,y+h,x,y,r);
+    ctx.arcTo(x,y,x+w,y,r);
+    if (fill) { ctx.fillStyle = fill; ctx.fill(); }
+    if (stroke){ ctx.strokeStyle = stroke; ctx.lineWidth = 2; ctx.stroke(); }
+  }
+
+  // ===== Kickoff =====
+  requestAnimationFrame(step);
+  showOverlay("BREAKOUT", "กด Start เพื่อเริ่ม หรือ Space ก็ได้", false, true);
+
+  // Keep overlay buttons in sync with game
+  function onResizeRebuild() {
+    // Rebuild level layout to match new size, and reposition paddle/ball sensibly
+    const W = canvas.clientWidth, H = canvas.clientHeight;
+    wall.right = W - 22; wall.bottom = H - 22;
+    if (GAME.running) {
+      buildLevel(GAME.levelIndex);
+      paddle.x = clamp(paddle.x, wall.left, wall.right - paddle.w);
+      paddle.y = H - 60;
+      if (GAME.awaitingLaunch) {
+        ball.x = paddle.x + paddle.w/2;
+        ball.y = paddle.y - ball.r - 1;
+      }
+    }
+  }
+  const ro = new ResizeObserver(() => { onResizeRebuild(); });
+  ro.observe(canvas);
+
+})();
+</script>
+</body>
+</html>
