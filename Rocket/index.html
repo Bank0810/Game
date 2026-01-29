@@ -1,0 +1,43 @@
+<!doctype html>
+<html lang="th">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width,initial-scale=1" />
+  <title>Space Web Shooter</title>
+  <link rel="stylesheet" href="styles.css" />
+</head>
+<body>
+  <div class="wrap">
+    <header>
+      <div class="title"><b>SPACE WEB SHOOTER</b><span>WASD / Arrow + Space</span></div>
+      <div class="hud">
+        <div class="pill">Score: <span id="score" class="v">0</span></div>
+        <div class="pill">HP: <span id="hp" class="v">10</span></div>
+        <div class="pill">Level: <span id="level" class="v">1</span></div>
+      </div>
+    </header>
+
+    <div class="canvasBox">
+      <canvas id="game" width="960" height="540"></canvas>
+
+      <div class="overlay" id="overlay">
+        <div class="panel" id="panel">
+          <h1>เริ่มเกม</h1>
+          <p>เดิน: <b>WASD</b> หรือ <b>↑↓←→</b> • ยิง: <b>Space</b></p>
+          <p>ศัตรูสุ่มเกิดด้านบน และมีหลายแบบ</p>
+          <div class="row">
+            <button id="btnStart">Start</button>
+            <button class="secondary" id="btnHelp">Help</button>
+          </div>
+          <div class="hint" id="help" style="display:none">
+            • ถ้าโดนศัตรู/กระสุน จะเสีย HP<br/>
+            • Level สูงขึ้น: ศัตรูเกิดถี่ขึ้น/เร็วขึ้น
+          </div>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <script type="module" src="js/main.js"></script>
+</body>
+</html>
